@@ -1,0 +1,59 @@
+[
+  {
+    "name": "calculate_age",
+    "command": "bash",
+    "args": ["./calculate_age.sh"],
+    "cwd": "."
+  },
+  {
+    "name": "command1",
+    "command": "bash",
+    "args": ["./command1.sh"],
+    "cwd": "."
+  },
+  {
+    "name": "hello_name",
+    "command": "cmd",
+    "args": ["/c", "hello_name.bat"],
+    "cwd": "."
+  },
+  {
+    "name": "almahari",
+    "cwd": ".",
+    "actions": ["open_almahari", "open_almahari_github"]
+  },
+  {
+    "name": "check_almahari_status",
+    "command": "bash",
+    "args": ["./check_almahari_status.sh"],
+    "cwd": ".",
+    "actions": ["open_almahari", "open_almahari_github"]
+  },
+  {
+    "name": "open_almahari",
+    "command": "cmd",
+    "args": ["/c", "start", "", "https://almahari.com"],
+    "cwd": ".",
+    "hidden": true
+  },
+  {
+    "name": "open_almahari_github",
+    "command": "cmd",
+    "args": ["/c", "start", "", "https://github.com/almahari"],
+    "cwd": ".",
+    "hidden": true,
+    "autoClose": true
+  },
+  {
+    "name": "ping_google",
+    "command": "bash",
+    "args": ["./ping_google.sh"],
+    "cwd": "."
+  },
+  {
+    "name": "gradle_build_solaceTest",
+    "command": "cmd",
+    "args": ["/c", "gradlew.bat", "build", "--console=rich"],
+    "cwd": "C:/Users/ali/IdeaProjects/solaceTest"
+  }
+]
