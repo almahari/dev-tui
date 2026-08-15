@@ -22,6 +22,11 @@ let actionSessionIndex = null;
 let input = "";
 let scroll = 0;
 let quitRequested = false;
+let fullRedraw = true;
+let lastRenderedMode = null;
+let renderTimer = null;
+let renderChunks = null;
+const renderDelayMs = 50;
 
 const colors = {
   reset: "\x1b[0m",
@@ -111,11 +116,22 @@ function move(row, column) {
 }
 
 function clearScreen() {
-  process.stdout.write("\x1b[2J\x1b[H");
+  if (fullRedraw) {
+    writeRaw("\x1b[2J\x1b[H");
+  }
 }
 
 function writeAt(row, column, text) {
-  process.stdout.write(move(row, column) + text);
+  writeRaw(move(row, column) + text);
+}
+
+function writeRaw(text) {
+  if (renderChunks) {
+    renderChunks.push(text);
+    return;
+  }
+
+  process.stdout.write(text);
 }
 
 function paintLine(row, width, color = colors.bg) {
@@ -187,7 +203,7 @@ function appendOutput(session, chunk) {
     session.output.splice(0, session.output.length - maxLines);
   }
 
-  render();
+  requestRender();
 }
 
 function startTool(tool, replaceIndex = null, options = {}) {
@@ -434,7 +450,7 @@ function renderSelect() {
   renderFooter(columns, rows, true);
 
   const width = Math.min(columns - 8, 92);
-  const height = Math.min(rows - 6, Math.max(12, filteredTools.length + 8));
+  const height = Math.min(rows - 6, Math.max(12, visibleTools.length + 8));
   const x = Math.max(2, Math.floor((columns - width) / 2));
   const y = Math.max(3, Math.floor((rows - height) / 2));
 
@@ -548,6 +564,7 @@ function renderRun() {
       writeAt(outputTop + row, outputX + 3, fit(line, outputWidth - 6));
     }
 
+    paintLine(rows - 1, columns);
     if (input.length > 0) {
       writeAt(rows - 1, 2, `${colors.white}${fit(`input: ${input}`, columns - 2)}${colors.reset}`);
     }
@@ -559,6 +576,17 @@ function render() {
     return;
   }
 
+  if (renderTimer) {
+    clearTimeout(renderTimer);
+    renderTimer = null;
+  }
+
+  if (lastRenderedMode !== mode) {
+    fullRedraw = true;
+  }
+
+  renderChunks = [];
+
   if (mode === "select") {
     renderSelect();
   } else if (mode === "action") {
@@ -566,6 +594,26 @@ function render() {
   } else {
     renderRun();
   }
+
+  process.stdout.write(renderChunks.join(""));
+  renderChunks = null;
+  fullRedraw = false;
+  lastRenderedMode = mode;
+}
+
+function requestRender(forceFullRedraw = false) {
+  if (forceFullRedraw) {
+    fullRedraw = true;
+  }
+
+  if (renderTimer) {
+    return;
+  }
+
+  renderTimer = setTimeout(() => {
+    renderTimer = null;
+    render();
+  }, renderDelayMs);
 }
 
 function openSelector() {
@@ -722,9 +770,14 @@ function handleRunKey(str, key) {
 
 function shutdown() {
   quitRequested = true;
+  if (renderTimer) {
+    clearTimeout(renderTimer);
+    renderTimer = null;
+  }
   stopAll();
   process.stdin.setRawMode(false);
   process.stdin.pause();
+  fullRedraw = true;
   clearScreen();
   process.stdout.write(colors.reset);
 }
@@ -747,7 +800,7 @@ function main() {
     }
   });
 
-  process.stdout.on("resize", render);
+  process.stdout.on("resize", () => requestRender(true));
   process.on("exit", () => {
     process.stdout.write("\x1b[?25h\x1b[?1049l" + colors.reset);
   });
