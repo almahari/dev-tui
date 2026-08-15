@@ -59,10 +59,13 @@ Visible placeholder tools can omit `command` when they only exist to group actio
 
 Selection screen:
 
+- Type to filter the script list
+- `Backspace`: edit the filter
 - `Up` / `Down`: move
 - `Space`: select or unselect a tool
 - `Enter`: start selected tools
-- `q`: quit
+- `Esc`: clear the filter, or return to running tabs
+- `Ctrl+Q`: quit
 
 Running screen:
 

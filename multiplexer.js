@@ -16,6 +16,7 @@ let active = 0;
 let mode = "select";
 let selector = 0;
 let selected = new Set();
+let selectFilter = "";
 let actionSelector = 0;
 let actionSessionIndex = null;
 let input = "";
@@ -152,9 +153,21 @@ function renderHeader(columns, title) {
 function renderFooter(columns, row, selectMode = false, hasActions = false) {
   const actionHelp = hasActions ? "    ctrl+a action" : "";
   const runHelp = `up/down scroll    tab tabs    ctrl+1..9 jump${actionHelp}    ctrl+r rerun    ctrl+w close    ctrl+s/ctrl+x stop    ctrl+n new    ctrl+q quit`;
-  const selectHelp = "^/v move    space select    enter start    esc back    q quit";
+  const selectHelp = "type filter    backspace edit    ^/v move    space select    enter start    esc clear/back    ctrl+q quit";
   paintLine(row, columns, colors.bgDark);
   writeAt(row, 2, `${colors.fgMuted}${fit(selectMode ? selectHelp : runHelp, columns - 2)}${colors.reset}`);
+}
+
+function filteredVisibleTools() {
+  const query = selectFilter.trim().toLowerCase();
+  if (!query) {
+    return visibleTools;
+  }
+
+  return visibleTools.filter((tool) => {
+    const command = tool.command ? `${tool.command} ${tool.args.join(" ")}` : "actions";
+    return `${tool.name} ${command}`.toLowerCase().includes(query);
+  });
 }
 
 function appendOutput(session, chunk) {
@@ -415,32 +428,39 @@ function stopAll() {
 
 function renderSelect() {
   const { columns, rows } = terminalSize();
+  const filteredTools = filteredVisibleTools();
   clearScreen();
   renderHeader(columns, "Dev TUI");
   renderFooter(columns, rows, true);
 
   const width = Math.min(columns - 8, 92);
-  const height = Math.min(rows - 6, Math.max(12, visibleTools.length + 7));
+  const height = Math.min(rows - 6, Math.max(12, filteredTools.length + 8));
   const x = Math.max(2, Math.floor((columns - width) / 2));
   const y = Math.max(3, Math.floor((rows - height) / 2));
 
   box(x, y, width, height, "Select Tools", true);
   writeAt(y + 2, x + 3, `${colors.white}${colors.bold}Choose tools to run${colors.reset}`);
-  writeAt(y + 3, x + 3, `${colors.fgMuted}Space toggles multiple tools. Enter starts the selection.${colors.reset}`);
+  writeAt(y + 3, x + 3, `${colors.fgMuted}Filter:${colors.reset} ${colors.white}${fit(selectFilter || "", width - 16)}${colors.reset}`);
+  writeAt(y + 4, x + 3, `${colors.fgMuted}Space toggles multiple tools. Enter starts the selection.${colors.reset}`);
 
-  const listTop = y + 5;
-  const listHeight = height - 7;
-  const start = Math.max(0, Math.min(selector - listHeight + 1, visibleTools.length - listHeight));
-  const end = Math.min(visibleTools.length, start + listHeight);
+  const listTop = y + 6;
+  const listHeight = height - 8;
+  selector = Math.max(0, Math.min(selector, filteredTools.length - 1));
+  const start = Math.max(0, Math.min(selector - listHeight + 1, filteredTools.length - listHeight));
+  const end = Math.min(filteredTools.length, start + listHeight);
 
   for (let index = start; index < end; index += 1) {
-    const tool = visibleTools[index];
-    const checked = selected.has(index) ? "[x]" : "[ ]";
+    const tool = filteredTools[index];
+    const checked = selected.has(tool.name) ? "[x]" : "[ ]";
     const command = tool.command ? `${tool.command} ${tool.args.join(" ")}`.trim() : "actions";
     const line = `${checked} ${tool.name}  ${colors.dim}${command}${colors.reset}`;
     const prefix = index === selector ? colors.bgBlue + colors.black : "";
     const suffix = index === selector ? colors.reset : "";
     writeAt(listTop + index - start, x + 3, prefix + fit(line, width - 6) + suffix);
+  }
+
+  if (filteredTools.length === 0) {
+    writeAt(listTop, x + 3, `${colors.fgMuted}${fit("No scripts match the filter.", width - 6)}${colors.reset}`);
   }
 }
 
@@ -552,20 +572,29 @@ function openSelector() {
   mode = "select";
   selector = 0;
   selected = new Set();
+  selectFilter = "";
   input = "";
   render();
 }
 
 function startSelected() {
-  const indexes = selected.size > 0 ? [...selected] : [selector];
-  for (const index of indexes) {
-    if (visibleTools[index]) {
-      startTool(visibleTools[index]);
-    }
+  const filteredTools = filteredVisibleTools();
+  const selectedTools = selected.size > 0
+    ? visibleTools.filter((tool) => selected.has(tool.name))
+    : [filteredTools[selector]].filter(Boolean);
+
+  if (selectedTools.length === 0) {
+    render();
+    return;
+  }
+
+  for (const tool of selectedTools) {
+    startTool(tool);
   }
 
   mode = "run";
   input = "";
+  selectFilter = "";
   render();
 }
 
@@ -584,21 +613,35 @@ function sendInput() {
 }
 
 function handleSelectKey(str, key) {
+  const filteredTools = filteredVisibleTools();
+
   if (key.name === "up") {
     selector = Math.max(0, selector - 1);
   } else if (key.name === "down") {
-    selector = Math.min(visibleTools.length - 1, selector + 1);
+    selector = Math.max(0, Math.min(filteredTools.length - 1, selector + 1));
   } else if (key.name === "space") {
-    if (selected.has(selector)) selected.delete(selector);
-    else selected.add(selector);
+    const tool = filteredTools[selector];
+    if (tool && selected.has(tool.name)) selected.delete(tool.name);
+    else if (tool) selected.add(tool.name);
   } else if (key.name === "return") {
     startSelected();
     return;
-  } else if (str === "q" || (key.ctrl && key.name === "q") || (key.ctrl && key.name === "c")) {
+  } else if (key.name === "backspace") {
+    selectFilter = selectFilter.slice(0, -1);
+    selector = 0;
+  } else if ((key.ctrl && key.name === "q") || (key.ctrl && key.name === "c")) {
     shutdown();
     return;
-  } else if (key.name === "escape" && sessions.length > 0) {
-    mode = "run";
+  } else if (key.name === "escape") {
+    if (selectFilter) {
+      selectFilter = "";
+      selector = 0;
+    } else if (sessions.length > 0) {
+      mode = "run";
+    }
+  } else if (str && !key.ctrl && !key.meta && visibleLength(str) === 1) {
+    selectFilter += str;
+    selector = 0;
   }
 
   render();
