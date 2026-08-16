@@ -8,6 +8,10 @@ A small terminal UI for starting and monitoring multiple tools from `tools.json`
 npm start
 ```
 
+## Slow terminals
+
+For VDI or slow remote terminals, reduce refresh frequency by increasing `ACTIVE_OUTPUT_REFRESH_MS` near the top of `multiplexer.js`.
+
 ## Tool config
 
 Tools are loaded from `tools.json`:

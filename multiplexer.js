@@ -25,8 +25,11 @@ let quitRequested = false;
 let fullRedraw = true;
 let lastRenderedMode = null;
 let renderTimer = null;
+let outputRenderTimer = null;
 let renderChunks = null;
-const renderDelayMs = 50;
+
+const FULL_RENDER_REFRESH_MS = 50;
+const ACTIVE_OUTPUT_REFRESH_MS = 100;
 
 const colors = {
   reset: "\x1b[0m",
@@ -203,7 +206,7 @@ function appendOutput(session, chunk) {
     session.output.splice(0, session.output.length - maxLines);
   }
 
-  requestRender();
+  requestOutputRender(session);
 }
 
 function startTool(tool, replaceIndex = null, options = {}) {
@@ -510,12 +513,8 @@ function renderActionSelect() {
   }
 }
 
-function renderRun() {
+function getRunLayout() {
   const { columns, rows } = terminalSize();
-  clearScreen();
-  renderHeader(columns, "Dev TUI");
-  renderFooter(columns, rows, false, Boolean(sessions[active]?.tool?.actions?.length));
-
   const gap = 2;
   const top = 3;
   const bottom = rows - 2;
@@ -523,6 +522,58 @@ function renderRun() {
   const listWidth = Math.min(30, Math.max(18, Math.floor(columns * 0.14)));
   const outputX = listWidth + gap + 1;
   const outputWidth = Math.max(20, columns - outputX);
+
+  return {
+    columns,
+    rows,
+    top,
+    panelHeight,
+    listWidth,
+    outputX,
+    outputWidth,
+  };
+}
+
+function renderActiveOutputPanel(layout = getRunLayout(), includeFrame = true) {
+  const { columns, rows, top, panelHeight, outputX, outputWidth } = layout;
+  const session = sessions[active];
+
+  if (!session) {
+    return;
+  }
+
+  if (includeFrame) {
+    frame(outputX, top, outputWidth, panelHeight, true);
+  }
+
+  const command = session.tool.command ? `${session.tool.command} ${session.tool.args.join(" ")}`.trim() : session.name;
+  writeAt(top + 1, outputX + 2, `${colors.fgMuted}${fit(command, outputWidth - 4)}${colors.reset}`);
+  writeAt(top + 2, outputX + 1, `${colors.fgPanelBorder}${"─".repeat(outputWidth - 2)}${colors.reset}`);
+
+  const outputTop = top + 4;
+  const outputHeight = panelHeight - 6;
+  const available = Math.max(0, session.output.length - outputHeight);
+  scroll = Math.max(0, Math.min(scroll, available));
+  const start = Math.max(0, session.output.length - outputHeight - scroll);
+  const lines = session.output.slice(start, start + outputHeight);
+
+  for (let row = 0; row < outputHeight; row += 1) {
+    const line = lines[row] || "";
+    writeAt(outputTop + row, outputX + 3, fit(line, outputWidth - 6));
+  }
+
+  paintLine(rows - 1, columns);
+  if (input.length > 0) {
+    writeAt(rows - 1, 2, `${colors.white}${fit(`input: ${input}`, columns - 2)}${colors.reset}`);
+  }
+}
+
+function renderRun() {
+  const layout = getRunLayout();
+  const { columns, rows, top, panelHeight, listWidth, outputX, outputWidth } = layout;
+  clearScreen();
+  renderHeader(columns, "Dev TUI");
+  renderFooter(columns, rows, false, Boolean(sessions[active]?.tool?.actions?.length));
 
   frame(1, top, listWidth, panelHeight, false);
   frame(outputX, top, outputWidth, panelHeight, true);
@@ -546,29 +597,7 @@ function renderRun() {
     writeAt(top + 1 + displayIndex - listStart, 2, prefix + fit(line, listWidth - 2) + suffix);
   }
 
-  const session = sessions[active];
-  if (session) {
-    const command = session.tool.command ? `${session.tool.command} ${session.tool.args.join(" ")}`.trim() : session.name;
-    writeAt(top + 1, outputX + 2, `${colors.fgMuted}${fit(command, outputWidth - 4)}${colors.reset}`);
-    writeAt(top + 2, outputX + 1, `${colors.fgPanelBorder}${"-".repeat(outputWidth - 2)}${colors.reset}`);
-
-    const outputTop = top + 4;
-    const outputHeight = panelHeight - 6;
-    const available = Math.max(0, session.output.length - outputHeight);
-    scroll = Math.max(0, Math.min(scroll, available));
-    const start = Math.max(0, session.output.length - outputHeight - scroll);
-    const lines = session.output.slice(start, start + outputHeight);
-
-    for (let row = 0; row < outputHeight; row += 1) {
-      const line = lines[row] || "";
-      writeAt(outputTop + row, outputX + 3, fit(line, outputWidth - 6));
-    }
-
-    paintLine(rows - 1, columns);
-    if (input.length > 0) {
-      writeAt(rows - 1, 2, `${colors.white}${fit(`input: ${input}`, columns - 2)}${colors.reset}`);
-    }
-  }
+  renderActiveOutputPanel(layout, false);
 }
 
 function render() {
@@ -579,6 +608,11 @@ function render() {
   if (renderTimer) {
     clearTimeout(renderTimer);
     renderTimer = null;
+  }
+
+  if (outputRenderTimer) {
+    clearTimeout(outputRenderTimer);
+    outputRenderTimer = null;
   }
 
   if (lastRenderedMode !== mode) {
@@ -613,7 +647,38 @@ function requestRender(forceFullRedraw = false) {
   renderTimer = setTimeout(() => {
     renderTimer = null;
     render();
-  }, renderDelayMs);
+  }, FULL_RENDER_REFRESH_MS);
+}
+
+function renderActiveOutputOnly() {
+  if (quitRequested || mode !== "run" || !sessions[active]) {
+    return;
+  }
+
+  renderChunks = [];
+  renderActiveOutputPanel(getRunLayout(), false);
+  process.stdout.write(renderChunks.join(""));
+  renderChunks = null;
+}
+
+function requestOutputRender(session) {
+  if (mode !== "run" || sessions[active]?.id !== session.id) {
+    return;
+  }
+
+  if (renderTimer || fullRedraw || lastRenderedMode !== "run") {
+    requestRender();
+    return;
+  }
+
+  if (outputRenderTimer) {
+    return;
+  }
+
+  outputRenderTimer = setTimeout(() => {
+    outputRenderTimer = null;
+    renderActiveOutputOnly();
+  }, ACTIVE_OUTPUT_REFRESH_MS);
 }
 
 function openSelector() {
@@ -715,17 +780,45 @@ function handleActionKey(str, key) {
   render();
 }
 
+function tabShortcutIndex(str, key) {
+  const direct = key.name || str || "";
+  if ((key.ctrl || key.meta) && /^[1-9]$/.test(direct)) {
+    return Number(direct) - 1;
+  }
+
+  const sequence = key.sequence || "";
+  const escapeDigit = sequence.match(/^\x1b([1-9])$/);
+  if (escapeDigit) {
+    return Number(escapeDigit[1]) - 1;
+  }
+
+  const altDigitMap = {
+    "¡": 0,
+    "™": 1,
+    "£": 2,
+    "¢": 3,
+    "∞": 4,
+    "§": 5,
+    "¶": 6,
+    "•": 7,
+    "ª": 8,
+  };
+
+  return altDigitMap[str] ?? altDigitMap[sequence] ?? null;
+}
+
 function handleRunKey(str, key) {
+  const tabIndex = tabShortcutIndex(str, key);
+
   if (key.name === "tab") {
     const displayIndexes = displaySessionIndexes();
     const current = Math.max(0, displayIndexes.indexOf(active));
     active = displayIndexes.length ? displayIndexes[(current + 1) % displayIndexes.length] : 0;
     scroll = 0;
-  } else if ((key.ctrl || key.meta) && /^[1-9]$/.test(key.name || str || "")) {
+  } else if (tabIndex !== null) {
     const displayIndexes = displaySessionIndexes();
-    const displayIndex = Number(key.name || str) - 1;
-    if (sessions[displayIndexes[displayIndex]]) {
-      active = displayIndexes[displayIndex];
+    if (sessions[displayIndexes[tabIndex]]) {
+      active = displayIndexes[tabIndex];
       scroll = 0;
     }
   } else if (key.ctrl && key.name === "n") {
@@ -773,6 +866,10 @@ function shutdown() {
   if (renderTimer) {
     clearTimeout(renderTimer);
     renderTimer = null;
+  }
+  if (outputRenderTimer) {
+    clearTimeout(outputRenderTimer);
+    outputRenderTimer = null;
   }
   stopAll();
   process.stdin.setRawMode(false);
